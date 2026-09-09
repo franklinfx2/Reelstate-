@@ -2,6 +2,18 @@ This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-
 
 ## Getting Started
 
+Copy `.env.example` to `.env.local` and fill in your Supabase project's URL
+and anon key (Settings -> API in the Supabase dashboard). `ANTHROPIC_API_KEY`
+is optional — without it, marketing copy generation falls back to a template.
+
+The schema (`properties`, `media`, `generated_content` tables, RLS policies,
+and the `property-media` storage bucket) lives in
+`supabase/migrations/20260908000000_initial_schema.sql`. Apply it to a fresh
+project via the Supabase CLI (`supabase db push`) or the SQL editor.
+
+Video processing (`src/lib/video.ts`) shells out to `ffmpeg` — install it
+separately (`apt-get install ffmpeg` / `brew install ffmpeg`).
+
 First, run the development server:
 
 ```bash
