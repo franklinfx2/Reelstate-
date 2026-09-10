@@ -14,6 +14,12 @@ project via the Supabase CLI (`supabase db push`) or the SQL editor.
 Video processing (`src/lib/video.ts`) shells out to `ffmpeg` — install it
 separately (`apt-get install ffmpeg` / `brew install ffmpeg`).
 
+> **Note:** the Next.js app above (server actions + `properties`/`media`/
+> `generated_content` in Supabase project `vxkgjaoryhymphpvfesd`) is not yet
+> wired to the Edge Function backend described below (`uploads`/`captions`
+> in a separate Supabase project). They're two independent backends right
+> now — see "Edge function backend" for the second one.
+
 First, run the development server:
 
 ```bash
@@ -40,6 +46,65 @@ To learn more about Next.js, take a look at the following resources:
 - [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+
+## Edge function backend
+
+`supabase/` also contains a second, standalone backend built on Supabase
+Edge Functions, targeting a different Supabase project
+(`https://hmqnpidncvylrwmsctxm.supabase.co`) with an `uploads`/`captions`
+schema:
+
+- `supabase/schema.sql` — tables, RLS, and the `videos`/`photos` storage
+  buckets.
+- `supabase/functions/upload` — `POST /functions/v1/upload`: stores the
+  video + photos and creates a `pending` upload row.
+- `supabase/functions/generate` — `POST /functions/v1/generate/:uploadId`:
+  calls Kling AI (falls back to a placeholder if `KLING_API_KEY` isn't set)
+  and marks the upload `ready`.
+- `supabase/functions/listing` — `GET /functions/v1/listing/:uploadId`:
+  renders the shareable HTML listing page.
+- `supabase/supabaseClient.js` — plain JS client, reads `SUPABASE_URL` /
+  `SUPABASE_ANON_KEY` from `supabase/.env` (copy `supabase/.env.example`).
+
+### Deploying
+
+```bash
+npm install -g supabase
+supabase login
+supabase link --project-ref hmqnpidncvylrwmsctxm
+
+# Apply the schema — paste supabase/schema.sql into the SQL editor, or:
+supabase db push --include-all
+
+# Deploy the functions
+supabase functions deploy upload
+supabase functions deploy generate
+supabase functions deploy listing
+
+# Optional — enables the real Kling AI call in supabase/functions/generate
+supabase secrets set KLING_API_KEY=your-key
+```
+
+`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
+injected automatically into deployed Edge Functions by Supabase — nothing
+to configure for those. The functions use the service-role key (not the
+anon key) for writes, since the schema's RLS only grants the public
+read access to listings once `status = 'ready'`.
+
+### Testing
+
+```bash
+curl -X POST https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/upload \
+  -H "apikey: sb_publishable_DjcUjyqEhkIXI43GSxbbBw_ZFBLK6FZ" \
+  -F "video=@raw.mp4" -F "photos=@photo1.jpg" \
+  -F "address=East Legon, Accra" -F "property_type=apartment" \
+  -F "price=2500" -F "agent_name=Kwame Mensah" -F "agent_phone=0244123456"
+
+curl -X POST https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/generate/<uploadId> \
+  -H "apikey: sb_publishable_DjcUjyqEhkIXI43GSxbbBw_ZFBLK6FZ"
+
+curl https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/listing/<uploadId>
+```
 
 ## Deploy on Vercel
 
