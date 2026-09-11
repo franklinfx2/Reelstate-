@@ -95,5 +95,5 @@ async function uploadToSupabase(filePath, storagePath) {
 }
 
 app.listen(PORT, () => {
-  console.log(`Reelstate video service listening on :${PORT}`);
+  console.log(`ClipState video service listening on :${PORT}`);
 });

@@ -54,7 +54,7 @@ export async function renderMarketingVideo(inputPath, outputPath) {
   const captions = pickCaptions(numCaptions);
 
   const watermark =
-    `drawtext=fontfile=${FONT}:text='Reelstate':fontsize=28:fontcolor=white@0.75:` +
+    `drawtext=fontfile=${FONT}:text='ClipState':fontsize=28:fontcolor=white@0.75:` +
     `x=w-text_w-32:y=h-text_h-40`;
 
   const filters = [

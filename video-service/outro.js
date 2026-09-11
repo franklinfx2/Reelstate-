@@ -14,7 +14,7 @@ export async function getOutroPath({ width, height, iconPath }) {
   const filter =
     `[1:v]scale=${Math.round(width * 0.33)}:${Math.round(width * 0.33)}[icon];` +
     `[0:v][icon]overlay=(W-w)/2:H*0.36[bg];` +
-    `[bg]drawtext=fontfile=${FONT}:text='Reelstate':fontsize=${Math.round(width * 0.06)}:fontcolor=white:` +
+    `[bg]drawtext=fontfile=${FONT}:text='ClipState':fontsize=${Math.round(width * 0.06)}:fontcolor=white:` +
     `x=(w-text_w)/2:y=H*0.58`;
 
   await run("ffmpeg", [

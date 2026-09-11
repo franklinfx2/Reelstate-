@@ -62,7 +62,7 @@ function renderListingPage(upload: any, captions: any[]): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>${escapeHtml(upload.address)} — Reelstate</title>
+<title>${escapeHtml(upload.address)} — ClipState</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -125,7 +125,7 @@ function renderProcessingPage(upload: any): string {
     : "Your listing is still being generated — check back in a moment.";
   return `<!doctype html>
 <html lang="en">
-<head><meta charset="utf-8" /><title>Reelstate — Processing</title></head>
+<head><meta charset="utf-8" /><title>ClipState — Processing</title></head>
 <body style="font-family: system-ui, sans-serif; text-align: center; padding: 80px 20px;">
   <h1>${escapeHtml(message)}</h1>
   <p>Status: ${escapeHtml(upload.status)}</p>
