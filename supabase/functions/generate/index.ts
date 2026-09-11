@@ -1,14 +1,17 @@
 // POST /functions/v1/generate/:uploadId
-// Fetches the upload, calls Kling AI to generate the walkthrough/reels
-// videos, and updates the row with the results.
+// Triggers the "Process video" GitHub Actions workflow to run the real
+// ffmpeg editing pipeline (video-service/), then returns immediately —
+// this is fire-and-forget, not synchronous. The workflow itself writes
+// the result (or a 'failed' status) straight onto the uploads row when
+// it finishes, using GH_REPO_REF's own SUPABASE_SERVICE_ROLE_KEY secret.
+// The client is expected to poll GET /functions/v1/status/:uploadId
+// until status is 'ready' or 'failed'.
 //
-// KLING_API_KEY is not set by default. Without it, this falls back to a
-// placeholder that just reuses the raw uploaded video, so the pending ->
-// generating -> ready pipeline (and the listing page) can be exercised
-// end-to-end before real Kling AI credentials exist. Set it with:
-//   supabase secrets set KLING_API_KEY=your-key
-// then replace the placeholder branch below with a real call once you know
-// Kling's actual request/response shape.
+// Required secrets (supabase secrets set ...):
+//   GH_PAT       — fine-grained PAT scoped to this repo, Actions: read/write
+//   GH_OWNER     — e.g. "franklinfx2"
+//   GH_REPO      — e.g. "Reelstate-"
+//   GH_REPO_REF  — branch that contains .github/workflows/process-video.yml
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 
@@ -39,88 +42,51 @@ Deno.serve(async (req) => {
   if (fetchError) return jsonResponse({ error: fetchError.message }, 500);
   if (!upload) return jsonResponse({ error: "Upload not found" }, 404);
 
-  await supabase.from("uploads").update({ status: "generating" }).eq(
-    "id",
-    uploadId,
-  );
-
   try {
-    const { walkthroughUrl, reelsUrl } = await generateVideos(upload);
-
-    const { error: updateError } = await supabase
-      .from("uploads")
-      .update({
-        walkthrough_video_url: walkthroughUrl,
-        reels_video_url: reelsUrl,
-        status: "ready",
-      })
-      .eq("id", uploadId);
-    if (updateError) throw new Error(updateError.message);
-
-    return jsonResponse(
-      {
-        uploadId,
-        status: "ready",
-        walkthrough_url: walkthroughUrl,
-        reels_url: reelsUrl,
-      },
-      200,
-    );
+    await triggerProcessingWorkflow(uploadId, upload.video_file_url);
   } catch (err) {
-    console.error("generate function error:", err);
-    await supabase.from("uploads").update({ status: "failed" }).eq(
-      "id",
-      uploadId,
-    );
+    console.error("Failed to trigger processing workflow:", err);
+    await supabase.from("uploads").update({ status: "failed" }).eq("id", uploadId);
     return jsonResponse(
-      { error: err instanceof Error ? err.message : "Generation failed" },
+      { error: err instanceof Error ? err.message : "Could not start processing" },
       500,
     );
   }
+
+  await supabase.from("uploads").update({ status: "generating" }).eq("id", uploadId);
+
+  return jsonResponse({ uploadId, status: "generating" }, 202);
 });
 
-// deno-lint-ignore no-explicit-any
-async function generateVideos(upload: any) {
-  const klingApiKey = Deno.env.get("KLING_API_KEY");
+async function triggerProcessingWorkflow(uploadId: string, videoUrl: string) {
+  const ghPat = Deno.env.get("GH_PAT");
+  const owner = Deno.env.get("GH_OWNER");
+  const repo = Deno.env.get("GH_REPO");
+  const ref = Deno.env.get("GH_REPO_REF");
 
-  if (!klingApiKey) {
-    console.warn(
-      "KLING_API_KEY not set — returning the raw video as a placeholder instead of calling Kling AI.",
+  if (!ghPat || !owner || !repo || !ref) {
+    throw new Error(
+      "Video processing isn't configured yet — missing GH_PAT/GH_OWNER/GH_REPO/GH_REPO_REF secrets.",
     );
-    return {
-      walkthroughUrl: upload.video_file_url,
-      reelsUrl: upload.video_file_url,
-    };
   }
 
-  // Placeholder endpoint/payload — adjust to Kling AI's actual API contract
-  // before relying on this in production.
-  const res = await fetch("https://api.klingai.com/v1/videos/generate", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${klingApiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      source_video_url: upload.video_file_url,
-      photos: upload.photos_array,
-      property_details: {
-        address: upload.address,
-        price: upload.price,
-        property_type: upload.property_type,
+  const res = await fetch(
+    `https://api.github.com/repos/${owner}/${repo}/actions/workflows/process-video.yml/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${ghPat}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
       },
-    }),
-  });
+      body: JSON.stringify({ ref, inputs: { uploadId, videoUrl } }),
+    },
+  );
 
   if (!res.ok) {
-    throw new Error(`Kling AI error ${res.status}: ${await res.text()}`);
+    throw new Error(`GitHub workflow dispatch failed (${res.status}): ${await res.text()}`);
   }
-
-  const data = await res.json();
-  return {
-    walkthroughUrl: data.walkthrough_video_url,
-    reelsUrl: data.reels_video_url,
-  };
 }
 
 function jsonResponse(body: unknown, status: number): Response {
