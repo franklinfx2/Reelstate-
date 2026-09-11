@@ -1,9 +1,9 @@
 // POST /functions/v1/upload
-// Accepts a multipart form (video, photos[], property details), stores the
-// files in Supabase Storage, and creates the uploads row with status
-// 'pending'. Uses the service-role key since this is a trusted server-side
-// write path — the anon key has no insert/storage-write access (see
-// supabase/schema.sql).
+// Creates the uploads row with status 'pending'. Expects the video and
+// photos to already be uploaded to Storage via signed URLs from
+// /functions/v1/upload-url — this function only ever receives small JSON
+// (paths + text fields), never raw file bytes, so it can't crash or drop
+// mid-transfer on a large video the way the old multipart-body version did.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
 
@@ -13,6 +13,7 @@ const REQUIRED_TEXT_FIELDS = [
   "price",
   "agent_name",
   "agent_phone",
+  "videoPath",
 ] as const;
 
 Deno.serve(async (req) => {
@@ -23,85 +24,55 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "Method not allowed" }, 405);
   }
 
+  // deno-lint-ignore no-explicit-any
+  let body: Record<string, any>;
   try {
-    const form = await req.formData();
+    body = await req.json();
+  } catch {
+    return jsonResponse({ error: "Invalid JSON body" }, 400);
+  }
 
-    const missing = REQUIRED_TEXT_FIELDS.filter((field) => !form.get(field));
-    const video = form.get("video");
-    if (!(video instanceof File) || video.size === 0) {
-      missing.push("video");
-    }
-    if (missing.length > 0) {
-      return jsonResponse(
-        { error: `Missing required field(s): ${missing.join(", ")}` },
-        400,
-      );
-    }
+  const missing = REQUIRED_TEXT_FIELDS.filter((field) => !body[field]);
+  if (missing.length > 0) {
+    return jsonResponse({ error: `Missing required field(s): ${missing.join(", ")}` }, 400);
+  }
 
-    const price = Number(form.get("price"));
-    if (!Number.isFinite(price) || price < 0) {
-      return jsonResponse(
-        { error: "price must be a non-negative number" },
-        400,
-      );
-    }
+  const price = Number(body.price);
+  if (!Number.isFinite(price) || price < 0) {
+    return jsonResponse({ error: "price must be a non-negative number" }, 400);
+  }
 
+  const photoPaths: string[] = Array.isArray(body.photoPaths) ? body.photoPaths : [];
+  if (photoPaths.length === 0) {
+    return jsonResponse({ error: "At least one photo is required" }, 400);
+  }
+
+  try {
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
 
-    const uploadId = crypto.randomUUID();
-    const videoFile = video as File;
+    const uploadId: string = body.uploadId || crypto.randomUUID();
 
-    const videoPath = `${uploadId}/${sanitizeFilename(videoFile.name)}`;
-    const { error: videoError } = await supabase.storage
-      .from("videos")
-      .upload(videoPath, videoFile, {
-        contentType: videoFile.type || "video/mp4",
-        upsert: true,
-      });
-    if (videoError) {
-      throw new Error(`Video upload failed: ${videoError.message}`);
-    }
-    const videoUrl =
-      supabase.storage.from("videos").getPublicUrl(videoPath).data.publicUrl;
-
-    const photoFiles = form
-      .getAll("photos")
-      .filter((f): f is File => f instanceof File && f.size > 0);
-
-    const photoUrls: string[] = [];
-    for (let i = 0; i < photoFiles.length; i++) {
-      const photo = photoFiles[i];
-      const photoPath = `${uploadId}/${i}-${sanitizeFilename(photo.name)}`;
-      const { error: photoError } = await supabase.storage
-        .from("photos")
-        .upload(photoPath, photo, {
-          contentType: photo.type || "image/jpeg",
-          upsert: true,
-        });
-      if (photoError) {
-        throw new Error(`Photo upload failed: ${photoError.message}`);
-      }
-      photoUrls.push(
-        supabase.storage.from("photos").getPublicUrl(photoPath).data
-          .publicUrl,
-      );
-    }
+    const videoUrl = supabase.storage.from("videos").getPublicUrl(body.videoPath).data
+      .publicUrl;
+    const photoUrls = photoPaths.map(
+      (path) => supabase.storage.from("photos").getPublicUrl(path).data.publicUrl,
+    );
 
     const { error: insertError } = await supabase.from("uploads").insert({
       id: uploadId,
       video_file_url: videoUrl,
       photos_array: photoUrls,
-      address: form.get("address"),
-      property_type: form.get("property_type"),
-      furnishing: form.get("furnishing") || null,
+      address: body.address,
+      property_type: body.property_type,
+      furnishing: body.furnishing || null,
       price,
-      agent_name: form.get("agent_name"),
-      agent_phone: form.get("agent_phone"),
-      agent_whatsapp: form.get("agent_whatsapp") || null,
-      description: form.get("description") || null,
+      agent_name: body.agent_name,
+      agent_phone: body.agent_phone,
+      agent_whatsapp: body.agent_whatsapp || null,
+      description: body.description || null,
       status: "pending",
     });
     if (insertError) {
@@ -117,10 +88,6 @@ Deno.serve(async (req) => {
     );
   }
 });
-
-function sanitizeFilename(name: string): string {
-  return name.replace(/[^a-zA-Z0-9.\-_]/g, "-");
-}
 
 function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
