@@ -106,6 +106,47 @@ curl -X POST https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/generate/<upl
 curl https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/listing/<uploadId>
 ```
 
+## Photos-only video generation (Kling AI)
+
+A third, separate flow: agents upload 5+ property photos (no walkthrough
+video required) and get back an AI-generated cinematic video. It's additive
+— the raw-video pipelines above are untouched — and lives on the same
+Supabase project as the Edge function backend (`hmqnpidncvylrwmsctxm`):
+
+- `supabase/reel_schema.sql` — `reel_projects`/`reel_photos`/`reel_clips`
+  tables and the `property-photos`/`generated-videos` storage buckets. Apply
+  it the same way as `schema.sql` (SQL editor, or `supabase db push`).
+- `supabase/functions/reel-upload-url`, `reel-upload` — signed photo uploads
+  + project creation, mirroring `upload-url`/`upload`.
+- `supabase/functions/reel-generate` — one Claude vision call analyzes every
+  photo, selects the best 5 (highest quality, diverse features), and writes
+  a Kling prompt + short caption for each; then dispatches the
+  `reel-process-video.yml` GitHub Actions workflow.
+- `supabase/functions/reel-status` — polling endpoint for the frontend.
+- `video-service/kling.js`, `reel-assemble.js`, `music.js`, `reel-run-job.mjs`
+  — the workflow's job: generate each clip via Kling AI, color-grade +
+  caption-overlay + crossfade them together behind a title card, mix in a
+  synthesized ambient music bed (swap in a real licensed track via
+  `MUSIC_BED_PATH`), upload the final MP4.
+- `src/app/reel/new`, `src/app/reel/[projectId]` — upload form and
+  processing/results pages in the Next.js app, talking to the Edge Functions
+  above via `NEXT_PUBLIC_REEL_SUPABASE_URL`/`NEXT_PUBLIC_REEL_SUPABASE_ANON_KEY`.
+
+### Required secrets
+
+Supabase project secrets (`supabase secrets set ...`): `ANTHROPIC_API_KEY`,
+`GH_PAT`, `GH_OWNER`, `GH_REPO`, `GH_REPO_REF` (same ones `functions/generate`
+already needs). GitHub Actions repo secrets: `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `KLING_ACCESS_KEY`, `KLING_SECRET_KEY` (Kling
+Open Platform access/secret key pair — not a single API key), and optionally
+a `KLING_API_BASE` repo variable.
+
+Note: the Kling client and prompt/duration choices in this flow haven't been
+exercised against a live Kling account — there was no API key available to
+test with while building it. Verify `video-service/kling.js`'s request/
+response shape against your account's Kling API version before relying on it
+in production.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.

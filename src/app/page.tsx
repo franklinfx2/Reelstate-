@@ -20,6 +20,9 @@ export default function Home() {
       >
         Create a listing
       </Link>
+      <Link href="/reel/new" className="mt-4 text-sm font-medium text-accent">
+        Or generate a video from photos only →
+      </Link>
     </main>
   );
 }
