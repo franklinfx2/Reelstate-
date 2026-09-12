@@ -1,15 +1,15 @@
-name: Generate reel video
+name: Assemble reel video
 
 on:
   workflow_dispatch:
     inputs:
       projectId:
-        description: "reel_projects.id to generate (photos-only Kling flow)"
+        description: "reel_projects.id to assemble (photos-only Kling flow) — every clip must already be ready"
         required: true
         type: string
 
 jobs:
-  generate:
+  assemble:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -26,12 +26,9 @@ jobs:
         working-directory: video-service
         run: npm install --omit=dev
 
-      - name: Generate clips and assemble video
+      - name: Download clips and assemble video
         working-directory: video-service
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          KLING_ACCESS_KEY: ${{ secrets.KLING_ACCESS_KEY }}
-          KLING_SECRET_KEY: ${{ secrets.KLING_SECRET_KEY }}
-          KLING_API_BASE: ${{ vars.KLING_API_BASE }}
         run: node reel-run-job.mjs "${{ inputs.projectId }}"

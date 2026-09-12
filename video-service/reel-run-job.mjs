@@ -1,21 +1,23 @@
-// Standalone job runner for GitHub Actions — the heavy half of the "photos
-// only" flow (analysis + prompt-writing already happened in the reel-generate
-// Edge Function). Usage: node reel-run-job.mjs <projectId>
-// Reads SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / KLING_ACCESS_KEY /
-// KLING_SECRET_KEY from env, generates each clip via Kling, assembles the
-// final video, uploads it, and writes the outcome straight onto the
-// reel_projects row — there's no caller waiting on an HTTP response.
+// Standalone job runner for GitHub Actions — the assembly half of the
+// "photos only" flow. By the time this runs, reel-generate (Claude
+// analysis/prompts) and reel-poll-clips (Kling job submission + polling)
+// have already finished in Supabase Edge Functions and every clip has a
+// kling_video_url — Kling credentials are Supabase-secret-only and never
+// reach this job. Usage: node reel-run-job.mjs <projectId>
+// Reads SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY from env, downloads each
+// ready clip, assembles the final video, uploads it, and writes the
+// outcome straight onto the reel_projects row — there's no caller waiting
+// on an HTTP response.
 import { unlink } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
 import { stat } from "node:fs/promises";
+import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
-import { generateClipFromPhoto } from "./kling.js";
 import { assembleReelVideo } from "./reel-assemble.js";
 
 const [, , projectId] = process.argv;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const CLIP_DURATION_SECONDS = 10;
 
 if (!projectId) {
   console.error("Usage: node reel-run-job.mjs <projectId>");
@@ -33,32 +35,20 @@ const tmpFiles = [];
 try {
   const project = await getProject(projectId);
   const clips = await getClips(projectId);
-  if (clips.length === 0) throw new Error("Project has no clips to generate");
+  if (clips.length === 0) throw new Error("Project has no clips to assemble");
 
-  await patchProject(projectId, { status: "generating" });
+  await patchProject(projectId, { status: "assembling" });
 
   const localClips = [];
   for (const clip of clips) {
-    const photoUrl = `${SUPABASE_URL}/storage/v1/object/public/property-photos/${clip.reel_photos.storage_path}`;
+    if (!clip.kling_video_url) {
+      throw new Error(`Clip ${clip.sort_order} has no generated video yet (status: ${clip.status})`);
+    }
     const destPath = `/tmp/reel-clip-source-${projectId}-${clip.sort_order}.mp4`;
     tmpFiles.push(destPath);
-
-    try {
-      const { taskId, videoUrl } = await generateClipFromPhoto({
-        imageUrl: photoUrl,
-        prompt: clip.prompt_text,
-        durationSeconds: CLIP_DURATION_SECONDS,
-        destPath,
-      });
-      await patchClip(clip.id, { status: "ready", kling_task_id: taskId, kling_video_url: videoUrl });
-      localClips.push({ path: destPath, caption: clip.caption_text });
-    } catch (err) {
-      await patchClip(clip.id, { status: "failed" }).catch(() => {});
-      throw new Error(`Clip ${clip.sort_order} generation failed: ${err.message}`);
-    }
+    await downloadTo(clip.kling_video_url, destPath);
+    localClips.push({ path: destPath, caption: clip.caption_text });
   }
-
-  await patchProject(projectId, { status: "assembling" });
 
   const outputPath = `/tmp/reel-final-${projectId}.mp4`;
   tmpFiles.push(outputPath);
@@ -92,7 +82,7 @@ async function getProject(id) {
 
 async function getClips(id) {
   const res = await restFetch(
-    `/rest/v1/reel_clips?project_id=eq.${id}&select=id,sort_order,caption_text,prompt_text,status,reel_photos(storage_path)&order=sort_order.asc`,
+    `/rest/v1/reel_clips?project_id=eq.${id}&select=id,sort_order,caption_text,status,kling_video_url&order=sort_order.asc`,
   );
   return res.json();
 }
@@ -106,13 +96,10 @@ async function patchProject(id, fields) {
   if (!res.ok) throw new Error(`Failed to update reel_projects row (${res.status}): ${await res.text()}`);
 }
 
-async function patchClip(id, fields) {
-  const res = await restFetch(`/rest/v1/reel_clips?id=eq.${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(fields),
-    headers: { Prefer: "return=minimal" },
-  });
-  if (!res.ok) throw new Error(`Failed to update reel_clips row (${res.status}): ${await res.text()}`);
+async function downloadTo(url, destPath) {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) throw new Error(`Failed to download clip (${res.status})`);
+  await pipeline(Readable.fromWeb(res.body), createWriteStream(destPath));
 }
 
 async function restFetch(path, { method = "GET", body, headers = {} } = {}) {

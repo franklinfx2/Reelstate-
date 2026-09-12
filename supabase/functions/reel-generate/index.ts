@@ -10,16 +10,24 @@
 // steps in a single request instead of two, which is faster and cheaper
 // without changing what gets produced.
 //
+// This function only submits Kling jobs (fast, non-blocking) — it never
+// waits for them to finish, since generation takes minutes and Edge
+// Functions can't hold a connection open that long. reel-poll-clips (run on
+// a schedule) checks on them and hands off to GitHub Actions for ffmpeg
+// assembly once every clip for a project is ready.
+//
 // Required secrets (supabase secrets set ...):
 //   ANTHROPIC_API_KEY — for the vision/selection/prompt-writing call
-//   GH_PAT, GH_OWNER, GH_REPO, GH_REPO_REF — same GitHub Actions dispatch
-//     secrets already used by functions/generate
+//   KLING_API_KEY (or KLING_ACCESS_KEY + KLING_SECRET_KEY) — see
+//     ../_shared/kling.ts. Kept Supabase-only; never passed to GitHub Actions.
 import { createClient } from "jsr:@supabase/supabase-js@2";
 import { corsHeaders } from "../_shared/cors.ts";
+import { submitImageToVideo } from "../_shared/kling.ts";
 
 const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
 const SELECT_COUNT = 5;
 const MAX_PHOTOS_TO_ANALYZE = 20;
+const CLIP_DURATION_SECONDS = 10;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -95,18 +103,36 @@ Deno.serve(async (req) => {
         .update({ is_selected: true, selection_rank: rank + 1 })
         .eq("id", photo.id);
 
-      const { error: clipError } = await supabase.from("reel_clips").insert({
-        project_id: projectId,
-        photo_id: photo.id,
-        sort_order: rank + 1,
-        caption_text: sel.caption,
-        prompt_text: sel.prompt,
-        status: "pending",
+      const { data: clipRow, error: clipError } = await supabase
+        .from("reel_clips")
+        .insert({
+          project_id: projectId,
+          photo_id: photo.id,
+          sort_order: rank + 1,
+          caption_text: sel.caption,
+          prompt_text: sel.prompt,
+          status: "pending",
+        })
+        .select("id")
+        .single();
+      if (clipError || !clipRow) {
+        throw new Error(`Could not save clip: ${clipError?.message ?? "unknown error"}`);
+      }
+
+      const photoUrl = supabase.storage
+        .from("property-photos")
+        .getPublicUrl(photo.storage_path).data.publicUrl;
+      const taskId = await submitImageToVideo({
+        imageUrl: photoUrl,
+        prompt: sel.prompt,
+        durationSeconds: CLIP_DURATION_SECONDS,
       });
-      if (clipError) throw new Error(`Could not save clip: ${clipError.message}`);
+      await supabase
+        .from("reel_clips")
+        .update({ kling_task_id: taskId, status: "generating" })
+        .eq("id", clipRow.id);
     }
 
-    await triggerProcessingWorkflow(projectId);
     await supabase.from("reel_projects").update({ status: "generating" }).eq("id", projectId);
 
     return jsonResponse({ projectId, status: "generating" }, 202);
@@ -217,37 +243,6 @@ function extractJson(text: string): string {
   const end = text.lastIndexOf("}");
   if (start === -1 || end === -1) throw new Error("No JSON found in model output");
   return text.slice(start, end + 1);
-}
-
-async function triggerProcessingWorkflow(projectId: string) {
-  const ghPat = Deno.env.get("GH_PAT");
-  const owner = Deno.env.get("GH_OWNER");
-  const repo = Deno.env.get("GH_REPO");
-  const ref = Deno.env.get("GH_REPO_REF");
-
-  if (!ghPat || !owner || !repo || !ref) {
-    throw new Error(
-      "Video generation isn't configured yet — missing GH_PAT/GH_OWNER/GH_REPO/GH_REPO_REF secrets.",
-    );
-  }
-
-  const res = await fetch(
-    `https://api.github.com/repos/${owner}/${repo}/actions/workflows/reel-process-video.yml/dispatches`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${ghPat}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ ref, inputs: { projectId } }),
-    },
-  );
-
-  if (!res.ok) {
-    throw new Error(`GitHub workflow dispatch failed (${res.status}): ${await res.text()}`);
-  }
 }
 
 function jsonResponse(body: unknown, status: number): Response {

@@ -119,15 +119,23 @@ Supabase project as the Edge function backend (`hmqnpidncvylrwmsctxm`):
 - `supabase/functions/reel-upload-url`, `reel-upload` — signed photo uploads
   + project creation, mirroring `upload-url`/`upload`.
 - `supabase/functions/reel-generate` — one Claude vision call analyzes every
-  photo, selects the best 5 (highest quality, diverse features), and writes
-  a Kling prompt + short caption for each; then dispatches the
-  `reel-process-video.yml` GitHub Actions workflow.
+  photo, selects the best 5 (highest quality, diverse features), writes a
+  Kling prompt + short caption for each, and *submits* (but does not wait
+  for) a Kling image-to-video job per selected photo.
+- `supabase/functions/reel-poll-clips` — meant to run on a schedule (not
+  called by the frontend). Edge Functions can't hold a connection open for
+  the minutes Kling generation takes, so this checks each pending clip's
+  status once per invocation, and once every clip for a project is ready,
+  dispatches `reel-process-video.yml` for assembly.
+- `supabase/functions/_shared/kling.ts` — the Kling Open Platform client
+  (submit + check-status, no polling loop). Kept entirely inside Edge
+  Functions so the Kling credential never has to leave Supabase.
 - `supabase/functions/reel-status` — polling endpoint for the frontend.
-- `video-service/kling.js`, `reel-assemble.js`, `music.js`, `reel-run-job.mjs`
-  — the workflow's job: generate each clip via Kling AI, color-grade +
-  caption-overlay + crossfade them together behind a title card, mix in a
-  synthesized ambient music bed (swap in a real licensed track via
-  `MUSIC_BED_PATH`), upload the final MP4.
+- `video-service/reel-assemble.js`, `music.js`, `reel-run-job.mjs` — the
+  workflow's job: download each already-generated clip (no Kling
+  credentials needed here), color-grade + caption-overlay + crossfade them
+  together behind a title card, mix in a synthesized ambient music bed
+  (swap in a real licensed track via `MUSIC_BED_PATH`), upload the final MP4.
 - `src/app/reel/new`, `src/app/reel/[projectId]` — upload form and
   processing/results pages in the Next.js app, talking to the Edge Functions
   above via `NEXT_PUBLIC_REEL_SUPABASE_URL`/`NEXT_PUBLIC_REEL_SUPABASE_ANON_KEY`.
@@ -136,16 +144,42 @@ Supabase project as the Edge function backend (`hmqnpidncvylrwmsctxm`):
 
 Supabase project secrets (`supabase secrets set ...`): `ANTHROPIC_API_KEY`,
 `GH_PAT`, `GH_OWNER`, `GH_REPO`, `GH_REPO_REF` (same ones `functions/generate`
-already needs). GitHub Actions repo secrets: `SUPABASE_URL`,
-`SUPABASE_SERVICE_ROLE_KEY`, `KLING_ACCESS_KEY`, `KLING_SECRET_KEY` (Kling
-Open Platform access/secret key pair — not a single API key), and optionally
-a `KLING_API_BASE` repo variable.
+already needs), and **`KLING_API_KEY`** (a single bearer key — or
+`KLING_ACCESS_KEY` + `KLING_SECRET_KEY` if your Kling account uses the
+access/secret pair + signed-JWT scheme instead; `_shared/kling.ts` supports
+either). Optionally `KLING_API_BASE` if your account isn't on the default
+`https://api-singapore.klingai.com` endpoint. The Kling credential is
+Supabase-only — it's never passed to GitHub Actions.
 
-Note: the Kling client and prompt/duration choices in this flow haven't been
-exercised against a live Kling account — there was no API key available to
-test with while building it. Verify `video-service/kling.js`'s request/
-response shape against your account's Kling API version before relying on it
-in production.
+GitHub Actions repo secrets: just `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+(same ones `process-video.yml` already uses) — no Kling credentials needed
+there, since assembly only downloads clip URLs Supabase already generated.
+
+**Cron job (required):** `reel-poll-clips` needs to run every ~1 minute for
+projects to ever finish. Easiest: Supabase Dashboard → Edge Functions →
+`reel-poll-clips` → add a cron trigger (e.g. `* * * * *`). Or via SQL
+(`pg_cron`/`pg_net`, both enabled by default on most projects):
+
+```sql
+select cron.schedule(
+  'reel-poll-clips',
+  '* * * * *',
+  $$
+  select net.http_post(
+    url := 'https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/reel-poll-clips',
+    headers := jsonb_build_object('Content-Type', 'application/json', 'apikey', '<anon key>')
+  );
+  $$
+);
+```
+
+Note: nothing in this flow has been exercised against a live Kling account
+yet — building it, there was no funded account available to test with (Kling
+requires purchasing API credits before any job, including a test one, will
+succeed). Once yours is funded, watch the first project's `/reel-status`
+response and the `reel-poll-clips`/`reel-process-video.yml` logs closely —
+`_shared/kling.ts`'s request/response shape follows Kling's documented Open
+Platform API but hasn't been confirmed against a real response.
 
 ## Deploy on Vercel
 
