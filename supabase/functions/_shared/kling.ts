@@ -8,7 +8,19 @@
 // access-key/secret-key pair (HS256-signed short-lived JWT) as
 // KLING_ACCESS_KEY/KLING_SECRET_KEY — whichever is set. Optional
 // KLING_API_BASE overrides the default international endpoint.
+//
+// Model name: "kling-v1" below is a guess, likely stale. Checking the
+// connected Kling account's own model catalog (via its MCP tool's
+// who_am_i) turned up current models named "kling-video-v2_5",
+// "kling-video-v2_6", "kling-video-o1" — that's a different generation
+// than "v1", though that catalog is from Kling's MCP wrapper, not
+// necessarily the exact `model_name` string this raw REST endpoint expects.
+// Override via KLING_MODEL_NAME once you've confirmed the right value
+// against your account's actual Kling Open Platform docs/dashboard —
+// there was no way to hit this raw endpoint from the build environment to
+// verify it directly (its egress policy blocks kling.ai outright).
 const DEFAULT_API_BASE = "https://api-singapore.klingai.com";
+const DEFAULT_MODEL_NAME = "kling-v1";
 
 function base64url(bytes: Uint8Array | string): string {
   const bin = typeof bytes === "string" ? bytes : String.fromCharCode(...bytes);
@@ -60,7 +72,7 @@ export async function submitImageToVideo(
     method: "POST",
     headers: { Authorization: await authHeader(), "Content-Type": "application/json" },
     body: JSON.stringify({
-      model_name: "kling-v1",
+      model_name: Deno.env.get("KLING_MODEL_NAME") || DEFAULT_MODEL_NAME,
       image: imageUrl,
       prompt,
       duration: String(durationSeconds),

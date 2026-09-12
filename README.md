@@ -148,8 +148,12 @@ already needs), and **`KLING_API_KEY`** (a single bearer key — or
 `KLING_ACCESS_KEY` + `KLING_SECRET_KEY` if your Kling account uses the
 access/secret pair + signed-JWT scheme instead; `_shared/kling.ts` supports
 either). Optionally `KLING_API_BASE` if your account isn't on the default
-`https://api-singapore.klingai.com` endpoint. The Kling credential is
-Supabase-only — it's never passed to GitHub Actions.
+`https://api-singapore.klingai.com` endpoint, and **`KLING_MODEL_NAME`**
+(defaults to `kling-v1`, likely stale — your account's Kling MCP tool
+listed current models as `kling-video-v2_5`/`v2_6`/`o1`, a newer generation
+than "v1"; confirm the exact `model_name` string your API version expects
+before relying on the default). The Kling credential is Supabase-only —
+it's never passed to GitHub Actions.
 
 GitHub Actions repo secrets: just `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 (same ones `process-video.yml` already uses) — no Kling credentials needed
