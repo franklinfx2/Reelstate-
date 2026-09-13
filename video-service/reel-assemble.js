@@ -57,7 +57,7 @@ async function renderTitleCard({ title, location, outPath }) {
     "-vf", [titleText, locationText].join(","),
     "-r", "30",
     "-an",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
     outPath,
   ]);
   return TITLE_DURATION;
@@ -94,7 +94,7 @@ async function renderClip({ inputPath, caption, outPath }) {
     "-vf", filters.join(","),
     "-r", "30",
     "-an",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
     outPath,
   ]);
 
@@ -142,7 +142,7 @@ export async function assembleReelVideo({ projectTitle, projectLocation, clips, 
       "-map", "1:a:0",
       "-shortest",
       "-r", "30",
-      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-b:v", "8M",
+      "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-b:v", "8M", "-pix_fmt", "yuv420p",
       "-c:a", "aac", "-b:a", "192k",
       "-movflags", "+faststart",
       outputPath,
@@ -181,7 +181,7 @@ async function concatWithCrossfade(segments, outputPath) {
     "-filter_complex", filterParts.join(";"),
     "-map", "[vout]",
     "-r", "30",
-    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
     outputPath,
   ]);
 
