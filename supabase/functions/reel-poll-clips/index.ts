@@ -22,17 +22,31 @@ Deno.serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  const { data: pendingClips, error: pendingError } = await supabase
-    .from("reel_clips")
-    .select("id, project_id, kling_task_id")
-    .eq("status", "generating")
-    .not("kling_task_id", "is", null);
-  if (pendingError) return jsonResponse({ error: pendingError.message }, 500);
+  // Seed from projects still "generating" (not from pending clips) — a
+  // project whose clips all finished between polling runs would otherwise
+  // never get touched here, since none of its clips would still be
+  // "generating" for the pending-clips query below to find.
+  const { data: activeProjects, error: activeProjectsError } = await supabase
+    .from("reel_projects")
+    .select("id")
+    .eq("status", "generating");
+  if (activeProjectsError) return jsonResponse({ error: activeProjectsError.message }, 500);
 
-  const touchedProjects = new Set<string>();
+  const touchedProjects = new Set((activeProjects ?? []).map((p) => p.id));
 
-  for (const clip of pendingClips ?? []) {
-    touchedProjects.add(clip.project_id);
+  let pendingClips: { id: string; project_id: string; kling_task_id: string | null }[] = [];
+  if (touchedProjects.size > 0) {
+    const { data, error } = await supabase
+      .from("reel_clips")
+      .select("id, project_id, kling_task_id")
+      .eq("status", "generating")
+      .not("kling_task_id", "is", null)
+      .in("project_id", [...touchedProjects]);
+    if (error) return jsonResponse({ error: error.message }, 500);
+    pendingClips = data ?? [];
+  }
+
+  for (const clip of pendingClips) {
     try {
       const result = await getTaskStatus(clip.kling_task_id!);
       if (result.status === "succeed") {
