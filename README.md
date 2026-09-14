@@ -1,113 +1,51 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Reelstate
 
-## Getting Started
+A property video order service. There is no automatic video generation —
+this is a manual-fulfillment workflow, on purpose:
 
-Copy `.env.example` to `.env.local` and fill in your Supabase project's URL
-and anon key (Settings -> API in the Supabase dashboard). `ANTHROPIC_API_KEY`
-is optional — without it, marketing copy generation falls back to a template.
+1. A client uploads their property photos at `/order`, sees a price
+   instantly, and gets Mobile Money payment instructions with an order
+   they can track at `/track/[id]`.
+2. You review new orders at `/admin`, confirm payment once it arrives,
+   download the client's photos, and edit the video by hand.
+3. You upload the finished video back through `/admin` — the client sees
+   it appear on their tracking page and downloads it from there.
 
-The schema (`properties`, `media`, `generated_content` tables, RLS policies,
-and the `property-media` storage bucket) lives in
-`supabase/migrations/20260908000000_initial_schema.sql`. Apply it to a fresh
-project via the Supabase CLI (`supabase db push`) or the SQL editor.
+Same channel in, same channel out. No AI generation pipeline, no
+third-party video API, nothing automatic in between.
 
-Video processing (`src/lib/video.ts`) shells out to `ffmpeg` — install it
-separately (`apt-get install ffmpeg` / `brew install ffmpeg`).
+## Getting started
 
-> **Note:** the Next.js app above (server actions + `properties`/`media`/
-> `generated_content` in Supabase project `vxkgjaoryhymphpvfesd`) is not yet
-> wired to the Edge Function backend described below (`uploads`/`captions`
-> in a separate Supabase project). They're two independent backends right
-> now — see "Edge function backend" for the second one.
+1. Copy `.env.example` to `.env.local` and fill in:
+   - `NEXT_PUBLIC_SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` from your
+     Supabase project (Settings → API). The service-role key is used
+     server-side only — see "Data model" below for why.
+   - `ADMIN_PASSWORD` and `ADMIN_SESSION_SECRET` (pick your own; generate
+     the secret with `openssl rand -hex 32`) to log into `/admin`.
+   - `PAYMENT_MOMO_NUMBER` and `PAYMENT_MOMO_NAME` — shown to clients on
+     their tracking page as payment instructions.
+2. Apply `supabase/migrations/20260914000000_orders_schema.sql` to your
+   Supabase project via the SQL editor or `supabase db push`. It creates
+   the `orders`/`order_photos` tables and the `order-photos` (private) /
+   `order-videos` (public) storage buckets.
+3. `npm install && npm run dev`, then open `/order` to place a test order
+   and `/admin` to work it.
 
-First, run the development server:
+## Pricing
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Bands live in `src/lib/pricing.ts` — 5–10 photos, 11–18, 19–28, or a
+custom quote above that / for bespoke edit requests. Edit that file to
+change prices or thresholds.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Data model
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`orders` and `order_photos` have Row Level Security enabled with **no**
+policies at all — the anon key can't read or write them under any
+circumstance. Every read and write goes through `supabaseAdmin()`
+(`src/lib/supabase.ts`), a service-role client used only inside server
+actions and server components (`src/app/order`, `src/app/track`,
+`src/app/admin`), so client photos, payment status, and order data are
+never reachable from the browser.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Edge function backend
-
-`supabase/` also contains a second, standalone backend built on Supabase
-Edge Functions, targeting a different Supabase project
-(`https://hmqnpidncvylrwmsctxm.supabase.co`) with an `uploads`/`captions`
-schema:
-
-- `supabase/schema.sql` — tables, RLS, and the `videos`/`photos` storage
-  buckets.
-- `supabase/functions/upload` — `POST /functions/v1/upload`: stores the
-  video + photos and creates a `pending` upload row.
-- `supabase/functions/generate` — `POST /functions/v1/generate/:uploadId`:
-  calls Kling AI (falls back to a placeholder if `KLING_API_KEY` isn't set)
-  and marks the upload `ready`.
-- `supabase/functions/listing` — `GET /functions/v1/listing/:uploadId`:
-  renders the shareable HTML listing page.
-- `supabase/supabaseClient.js` — plain JS client, reads `SUPABASE_URL` /
-  `SUPABASE_ANON_KEY` from `supabase/.env` (copy `supabase/.env.example`).
-
-### Deploying
-
-```bash
-npm install -g supabase
-supabase login
-supabase link --project-ref hmqnpidncvylrwmsctxm
-
-# Apply the schema — paste supabase/schema.sql into the SQL editor, or:
-supabase db push --include-all
-
-# Deploy the functions
-supabase functions deploy upload
-supabase functions deploy generate
-supabase functions deploy listing
-
-# Optional — enables the real Kling AI call in supabase/functions/generate
-supabase secrets set KLING_API_KEY=your-key
-```
-
-`SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` are
-injected automatically into deployed Edge Functions by Supabase — nothing
-to configure for those. The functions use the service-role key (not the
-anon key) for writes, since the schema's RLS only grants the public
-read access to listings once `status = 'ready'`.
-
-### Testing
-
-```bash
-curl -X POST https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/upload \
-  -H "apikey: sb_publishable_DjcUjyqEhkIXI43GSxbbBw_ZFBLK6FZ" \
-  -F "video=@raw.mp4" -F "photos=@photo1.jpg" \
-  -F "address=East Legon, Accra" -F "property_type=apartment" \
-  -F "price=2500" -F "agent_name=Kwame Mensah" -F "agent_phone=0244123456"
-
-curl -X POST https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/generate/<uploadId> \
-  -H "apikey: sb_publishable_DjcUjyqEhkIXI43GSxbbBw_ZFBLK6FZ"
-
-curl https://hmqnpidncvylrwmsctxm.supabase.co/functions/v1/listing/<uploadId>
-```
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`/admin` itself is gated by a signed, HMAC-verified session cookie
+(`src/lib/admin-auth.ts`), checked on every admin page and server action.
